@@ -85,19 +85,49 @@ def spacewalk_report(name):
         if len(keys) == len(values):
             yield dict(zip(keys, values))
 
+def custom_spacewalk_report(id):
+    """Yield a dictionary form of each CSV output produced by the specified
+    spacewalk-report
+    """
+    name='custom-info_' + str(id)
+    query = str("--where-server_id=" + str(id))
+    cache_filename = os.path.join(CACHE_DIR, name)
+    if not os.path.exists(cache_filename) or \
+            (time.time() - os.stat(cache_filename).st_mtime) > CACHE_AGE:
+        fh = open(cache_filename, 'w')
+        p = subprocess.Popen([SW_REPORT, 'custom-info', query], stdout=fh)
+        p.wait()
+        fh.close()
 
+    lines = open(cache_filename, 'r').readlines()
+    keys = lines[0].strip().split(',')
+    for line in lines[1:]:
+        values = line.strip().split(',')
+        if len(keys) == len(values):
+            yield dict(zip(keys, values))
+    
+ 
 # Options
 #------------------------------
 
-parser = OptionParser(usage="%prog [options] --list | --host <machine>")
+parser = OptionParser(usage="%prog [options] --list | --host <hostname> | --profile <profile_name>")
 parser.add_option('--list', default=False, dest="list", action="store_true",
                   help="Produce a JSON consumable grouping of servers for Ansible")
 parser.add_option('--host', default=None, dest="host",
                   help="Generate additional host specific details for given host for Ansible")
+parser.add_option('--profile', default=None, dest="profile",
+                  help="Generate additional profile specific details for given spacewalk profile")
 parser.add_option('-H', '--human', dest="human",
                   default=False, action="store_true",
                   help="Produce a friendlier version of either server list or host detail")
 (options, args) = parser.parse_args()
+
+# Debug
+#------------------------------
+#f = open('/tmp/args', 'a')
+#s = str(sys.argv)
+#s += '\n'
+#f.write(s)
 
 
 # List out the known server from Spacewalk
@@ -107,6 +137,7 @@ if options.list:
     groups = {}
     try:
         for system in spacewalk_report('system-groups-systems'):
+# spacewalk-report inventory --like-system_group=Live
             if system['group_name'] not in groups:
                 groups[system['group_name']] = set()
 
@@ -133,15 +164,20 @@ elif options.host:
     host_details = {}
     try:
         for system in spacewalk_report('inventory'):
-            if system['hostname'] == options.host:
+# a bit of a hack for the case where a new host has not checkeded in AFTER having its hostname set
+            #if (system['hostname'] == options.host) or (system['profile_name'] == options.host):
+            if (system['hostname'] == options.host) or (system['profile_name'] == options.host):
                 host_details = system
+    		for line in  custom_spacewalk_report(system['server_id']):
+                    host_details[str(line['key'])] = str(line['value'])
                 break
 
     except (OSError), e:
         print >> sys.stderr, 'Problem executing the command "%s inventory": %s' % \
             (SW_REPORT, str(e))
         sys.exit(2)
-    
+
+ 
     if options.human:
         print 'Host: %s' % options.host
         for k, v in host_details.iteritems():
